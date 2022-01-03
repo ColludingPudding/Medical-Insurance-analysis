@@ -1,0 +1,516 @@
+---
+title: "Final Project"
+author: "Hoan Le"
+date: "15/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r library, include = FALSE}
+# Libraries we're using 
+
+library(data.table)
+library(ggcorrplot)
+library(ggplot2)
+library(plyr)
+library(tidyverse)
+library(GGally)
+library(caret)
+library(MASS)
+library(plotly)
+library(ggdendro)
+
+# Set working directory as the current file directory (Only works for Rstudio)
+# setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+```
+
+
+
+
+## Quick introduction
+
+Our goal in this project is to discover the relationship between some variables of interest and their relationship with insurance charges. This dataset was taken from the book Machine Learning with R by Brett Lantz.
+
+Link to the dataset: https://www.kaggle.com/mirichoi0218/insurance
+
+
+
+## Dataset content:
+
+**Data description:** 1300+ entries of insurance charges with some other relevant data. A quick check shows that we have no missing values or duplicates, so there's little data handling to be done.
+
+* age: age of primary beneficiary
+* sex: insurance contractor gender, female, male
+* bmi: Body mass index, providing an understanding of body, weights that are relatively high or low relative to height,
+objective index of body weight (kg / m ^ 2) using the ratio of height to weight, ideally 18.5 to 24.9
+* children: Number of children covered by health insurance / Number of dependents
+* smoker: Smoking
+* region: the beneficiary's residential area in the US, northeast, southeast, southwest, northwest.
+* charges: Individual medical costs billed by health insurance
+
+```{r include = FALSE}
+# Importing the insurance dataset
+df = read.csv(file="insurance.csv",
+             header=T,
+             sep=",",
+             dec=".",
+             stringsAsFactors = T)
+
+str(df)
+```
+
+**The age column ranges from 18-64** To further simplify and make plotting easier, we'll be grouping the entries into group ages:
+
+* Millennial: 18-38
+* Gen X: 39-54
+* Baby Boomers: 55+
+
+**Similar grouping with BMI:**
+
+* Under Weight: 0-18.5
+* Normal Weight: 18.5-25
+* Overweight: 25-30
+* Obese: 30+
+
+
+```{r ,include=FALSE}
+agebreaks <- c(0,39,55,100)
+agelabels <- c("millennial","genX","babyboomer")
+
+setDT(df)[ , age_groups := cut(age, 
+                            breaks = agebreaks, 
+                            right = FALSE, 
+                            labels = agelabels)]
+
+bmibreaks <- c(0,18.5,25,30,100)
+bmilabels <- c("under","normal","over","obese")
+
+setDT(df)[ , bmi_groups := cut(bmi, 
+                            breaks = bmibreaks, 
+                            right = FALSE, 
+                            labels = bmilabels)]
+
+# Add levels to age groups
+df$age_groups <- factor(df$age_groups, levels = c("millennial","genX","babyboomer"),
+       ordered = TRUE)
+
+df$bmi_groups <- factor(df$bmi_groups, levels = c("under","normal","over","obese"),
+       ordered = TRUE)
+```
+   
+```{r echo=FALSE}
+plot_ly( x=df$age, y=df$bmi, z=df$charges, color=df$age_groups) %>% 
+  add_markers() %>% 
+  layout(title  = "Numerical scatterplot divided by age groups",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+plot_ly( x=df$age, y=df$bmi, z=df$charges, color=df$bmi_groups) %>%
+  add_markers() %>% 
+  layout(title  = "Numerical scatterplot divided by BMI groups",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+```              
+
+
+
+## EDA and relevant observations
+
+
+We'll now look further into the relationships between the variables in the dataset. To summarize, here are the interestings findings we've gathered, that might lead us to analyzing the relationships between:
+
+* BMI
+* Age
+* Charges
+
+```{r echo = FALSE}
+# Correlation heatmap
+corr <- round(cor(df %>% dplyr::select(age,bmi,children,charges)), 4)
+head(corr[, 1:4])
+
+ggcorrplot(corr)
+
+```
+
+```{r include = FALSE}
+# Histogram for bmi and charges
+ggplot(df, aes(x=bmi)) + geom_histogram()
+ggplot(df, aes(x=charges)) + geom_histogram()
+# Log transformation
+df$log_charges <- log(df$charges)
+ggplot(df, aes(x=log_charges)) + geom_histogram()
+```
+
+* **Age groups and insurance charge:** We notice an odd overall trend: the older you are, the higher your insurance charge. This may be attributed to old age problems being more severe and harder to treat.
+
+```{r echo = FALSE}
+chargemean <- ddply(df, "age_groups", summarise, grp.mean=mean(charges))
+
+ggplot(df, aes(x =charges, fill = age_groups)) +
+  geom_density(alpha = .3) +
+  geom_vline(data=chargemean, aes(xintercept=grp.mean,color=age_groups),linetype="dashed",size = 1) +
+  labs(title="density plot divided by age groups")
+```
+
+* **Age groups and BMI:** Overall the boxplot seems to show an positive association between age and BMI, but as the correlation we've calculated before is only ~0.1, there exists a non-significant relationship. Notice the range of BMI also decreases as the age increases (millennial's BMI range is much wider than baby boomers').
+
+```{r echo = FALSE}
+ggplot(df, aes(x = age_groups, y =bmi, fill = age_groups)) + 
+  geom_boxplot(alpha = 0.4) +
+  labs(title="boxplot divided by age groups")
+```
+
+* **BMI and insurance charges relationship:** Interesting because we assume underweight and obese patients would have an asymmetric structure. Does this imply overweight health problems are more expensive to treat compared to the other, or is this a sort of target pricing? 
+
+```{r echo = FALSE}
+ggplot(df, aes(x = bmi_groups, y =charges, fill = bmi_groups)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title="boxplot divided by BMI groups")
+```
+
+
+### Some other interesting obsevations we've found during this EDA:
+
+
+* **BMI comparision between smokers and non-smokers:** relatively similar, which is odd because smoking is known to increase your metabolism and make you lose weight. Then again, our dataset is looking at the demography who has to use their insurance, so there might be an underlying health factor at play. 
+
+* The relationship might be uncovered by some confounding factors?
+
+
+```{r echo = FALSE}
+ggplot(df, aes(x = smoker, y =bmi, fill = smoker)) +
+  geom_boxplot(alpha = 0.4) +
+  labs(title="boxplot with respect to smoking habits")
+```
+
+* **Charges comparision between regions:** The southwest seems to be the cheaper region, compared to the others, while the mean of northeast is the highest || the distribution of southeast is skewed to higher values. The general trend is unrecognizable when we plot region against numerical variable.
+
+```{r echo = FALSE}
+# Density plot between charges and age groups
+ggplot(df, aes(x= region,y=charges, fill = region)) +
+  geom_boxplot(alpha=0.5) +
+  labs(title="boxplot with respect to region")
+
+plot_ly( x=df$age, y=df$bmi, z=df$charges, color=df$region) %>%
+  add_markers() %>% 
+  layout(title  = "Scatterplot with respect to region",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+```
+
+* **BMI/Age/Insurance Charge:** A closer look at the relationship between the variables we're most concerned with. There seem to be a strong correlation between higher charge and obesity || old age. We'll look deeper into this later in our toy linear model.
+
+```{r echo = FALSE}
+ggplot(df, aes(x= age,y=charges)) +
+  geom_point(aes(colour = bmi_groups),alpha=.5) +
+  labs(title="scatterplot divided by BMI group")
+
+ggplot(df, aes(x= bmi,y=charges)) +
+  geom_point(aes(colour = age_groups),alpha=.5) +
+  labs(title="scatterplot divided by age group")
+```
+
+* **Smoking vs medical fees:** It's not much a surprise to see smokers have much higher insurance charge compared to non-smokers. 
+
+```{r echo = FALSE, message=FALSE}
+df %>% 
+  dplyr::select(age,bmi,charges,smoker) %>% 
+  ggpairs(.,legend = 1,
+          mapping = ggplot2::aes(colour=smoker),
+          lower = list(continuous = wrap("smooth", alpha = 0.3, size=0.1))) +
+  theme(legend.position = "bottom") 
+
+ggplot(df, aes(x= age,y=charges)) +
+  geom_point(aes(colour = smoker),alpha=.5) +
+  labs(title="scatterplot divided by smoking habits")
+```
+
+
+
+## Regression task: Can you accurately predict insurance costs?
+
+
+**This task was taken from the book** This objective might sound strange to most, but in the US, where people would prefer to drive themselves or call a taxi during emergencies rather than call the ambulance, it's actually a very relevant problem. Where insurance services wildly vary in what they cover rises the service to estimate hospital bill. 
+
+Keep in mind, **this dataset was simulated** on the basis of demographic statistics from the US Census Bureau, according to the book from which it is from. But this can be used as a basis to develop an insight to the US medical insurance system.
+
+
+### The relationship between BMI and age with insurance charge
+
+
+We're to take a closer look between **BMI, age and charge**. These variables were selected because they are the main numeric variables in this dataset, which describe the most variance in the data.
+
+After a quick look at the toy model we've built and their respective p-values, we can confirm there's a correlation between the variables. Looking at the residual standard error and R-squared, it's easy to see we were naive to think a linear model would suffice. With an F-statistic of 51 we might be able to assume a correlation here, and move on to implementing other models.
+
+```{r echo = FALSE}
+
+# Setting cross validation method
+
+set.seed(64)
+control <- trainControl(method="cv", number=10)
+
+# Simple linear regression model
+lm.model <- train(charges~ bmi + age_groups, data=df, method="lm", 
+       trControl=control, preProcess = c("center", "scale") )
+
+X_new = data.frame(bmi = seq(min(df$bmi),max(df$bmi)),
+                   age_groups =df$age_groups[1:38])
+X_new$pred <- predict(lm.model, X_new, type = "raw")
+
+# Looking at the simple model for correlation
+summary(lm.model)
+# Plotting the model
+df %>%
+  ggplot(aes(x=bmi, y=charges, group=age_groups)) + 
+  geom_point(aes(col=age_groups), alpha=0.2) + 
+  geom_line(aes(y=pred, col=age_groups), data=X_new) +
+  labs(title="linear model")
+
+```
+**The simple linear regression model** seems to have captured the correlation between age, bmi and charge. This further supports the idea of a relationship between them.
+
+### Comparing a few regression models' performance in this dataset
+
+The dataset was stratified spilitted into **80% train and 20% test**. All the models were evaluated with a 10 fold cross validation. Below is the results of the models on the test sat.
+
+We can see the overall winner with minimum tuning is **random forest**, followed by KNN. In this specific dataset, it seems pcr performed the worst, might be due to some feature of the dataset we're not yet aware of. What's odd is the dataset has a particular structure that we expect random forest to catch, but its accuracy was lower than expected.
+
+
+```{r include=FALSE}
+
+# Splitting 80-20 train-test sets
+
+idx = sample.int(n = nrow(df), size = floor(.8*nrow(df)), replace = F)
+train = df[idx, ] %>% dplyr::select(-age_groups,-bmi_groups,-log_charges)
+test  = df[-idx, ] %>% dplyr::select(-age_groups,-bmi_groups,-log_charges)
+
+lmAIC.model <- train(charges~., data=train, method="lmStepAIC", 
+       trControl=control, preProcess = c("center", "scale") )
+
+pcr.model <- train(charges~., data=train, method="pcr", 
+       trControl=control, preProcess = c("center", "scale") )
+
+pls.model <- train(charges~., data=train, method="pls", 
+       trControl=control, preProcess = c("center", "scale") )
+
+ridge.model <- train(charges~., data=train, method="ridge", 
+       trControl=control, preProcess = c("center", "scale") )
+
+lasso.model <- train(charges~., data=train, method="lasso", 
+       trControl=control, preProcess = c("center", "scale") )
+
+enet.model <- train(charges~., data=train, method="enet", 
+       trControl=control, preProcess = c("center", "scale") )
+
+knn.model <- train(charges~., data=train, method="knn", 
+       trControl=control, preProcess = c("center", "scale") )
+
+gam.model <- train(charges~., data=train, method="gam", 
+       trControl=control, preProcess = c("center", "scale") )
+
+rf.model <- train(charges~., data=train, method="rf", 
+       trControl=control, preProcess = c("center", "scale") )
+
+```
+
+```{r, echo = FALSE}
+for( model in list(lmAIC.model, pcr.model, pls.model, ridge.model, lasso.model, 
+                   enet.model, knn.model, gam.model, rf.model)){
+  regression_pred <- predict(model, test)
+  print(model$method)
+  print(postResample(pred = regression_pred, obs = test$charges))
+}
+```
+
+```{r, include = FALSE}
+# create grid for predictions
+x_test  = df[-idx, ] %>% dplyr::select(-charges,-age_groups,-bmi_groups,-log_charges)
+x_test$charges <- predict(rf.model, x_test, type = "raw")
+x_test$label <- "prediction"
+test$label <- "test"
+x_test <- rbind(x_test,test)
+```
+
+```{r, warning=FALSE, echo = FALSE}
+
+plot_ly( x=x_test$age, y=x_test$bmi, z=x_test$charges, color=x_test$label,stroke=TRUE)  %>%
+  add_markers() %>% 
+  layout(title  = "Random Forest prediction vs actual charge on the test dataset",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+```
+
+
+
+## Clustering task: Predicting the clusters with higher insurance charges
+
+
+The direct implication is helping us **establish better choices in our lifestyle** to **lower our insurance charge**. But with this information, researchers would also understand which demographic is mostly affected by these medical charges, and make it a basis to solving bigger problems.
+
+
+### K-means model
+
+
+The elbow method showed us the number of clusters should be 3-4. Since children is rather similar to a categorical variable, we can continue with the other 3 variables.
+
+```{r, include=FALSE}
+# Making a new dataframe considering only numerical features
+df_num <- df %>% dplyr::select(age,bmi,charges)
+
+### Using the elbow method to determine clusters number
+
+# Running many models with varying value of k (centers)
+tot_withinss <- map_dbl(1:10,  function(k){
+  model <- kmeans(x = df_num, centers = k)
+  model$tot.withinss
+})
+
+# Generate a data frame containing both k and tot_withinss
+elbow_df <- data.frame(k = 1:10,tot_withinss = tot_withinss)
+```
+
+```{r, echo=FALSE}
+# Plot the elbow plot
+ggplot(elbow_df, aes(x = k, y = tot_withinss)) +
+  geom_line() + geom_point()+
+  scale_x_continuous(breaks = 1:10) +
+  labs(title="elbow plot to determine k")
+```
+
+K-means model gave us a very insightful look at the clusters. The overall visual accuracy might be due to the fact that the dataset was simulated. What's interesting is when we increase the cluster number from 3 to 4, there seems to appear another cluster that's divided by age from the lower insurance charge cluster.
+
+```{r, include=FALSE}
+km3.model = kmeans(df_num, 3, nstart = 25, iter.max = 1e2)
+km4.model = kmeans(df_num, 4, nstart = 25, iter.max = 1e2)
+# Adding the labels
+df_num$lab1 = as.factor(km3.model$cluster)
+df_num$lab2 = as.factor(km4.model$cluster)
+```
+
+```{r, echo=FALSE}
+# Plotting the data points with regards to the 3 numerical variables
+plot_ly( x=df_num$age, y=df_num$bmi, z=df_num$charges, color=df_num$lab1) %>% 
+  add_markers() %>% 
+  layout(title  = "K-Means clustering with K = 3",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+plot_ly( x=df_num$age, y=df_num$bmi, z=df_num$charges, color=df_num$lab2) %>%
+  add_markers() %>% 
+  layout(title  = "K-Means clustering with K = 4",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+```
+
+### Hierarchical models
+
+```{r, include=FALSE}
+# Implementing the model
+h_1 = hclust(dist(df_num), method = "complete")
+h_2 = hclust(dist(df_num), method = "single")
+h_3 = hclust(dist(df_num), method = "average")
+```
+
+```{r, echo=FALSE}
+# Dendrogram with ggdendro
+ggdendrogram(h_1)
+ggdendrogram(h_2)
+ggdendrogram(h_3)
+```
+
+A quick glance tells us we should skip the single method, because to the right we see a very intertwined branch. This will make it harder to interpretate the results as well as won't give us a clear cluster.
+
+From the result of the elbow test earlier, we've decided that this dataset will have **3-4 clusters**. We'll now cut the branches accordingly.
+
+```{r, include=FALSE}
+# for 3 clusters
+df_num$lab_3 = as.factor(cutree(h_1, h=30000))
+df_num$lab_4 = as.factor(cutree(h_3, h=20000))
+
+# for 4 clusters
+df_num$lab_5 = as.factor(cutree(h_1, h=25000))
+df_num$lab_6 = as.factor(cutree(h_3, h=13000))
+```
+
+### Visualizing the clusters
+
+The average linkaged model showed some prospects, but only managed to capture 2 clusters when we look at the scatterplot. Meanwhile the complete linkage model seems to divide the upper datapoints using a combination of age and BMI.
+
+```{r, echo=FALSE}
+plot_ly( x=df_num$age, y=df_num$bmi, z=df_num$charges, color=df_num$lab_3) %>%
+  add_markers() %>% 
+  layout(title  = "Hierarchical clustering complete linkage with 3 clusters",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+```
+
+Interestingly, the hierarchical model for 4 cluster only captured some outliers for its 4th cluster. The correlation-based approach also produced a horrible result, with 1 cluster being the majority. We won't be going any further on these.
+
+```{r, include=FALSE}
+plot_ly( x=df_num$age, y=df_num$bmi, z=df_num$charges, color=df_num$lab_4) %>%
+  add_markers() %>% 
+  layout(title  = "Hierarchical clustering average linkage with 3 clusters",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+plot_ly( x=df_num$age, y=df_num$bmi, z=df_num$charges, color=df_num$lab_5)  %>%
+  add_markers() %>% 
+  layout(title  = "Hierarchical clustering complete linkage with 4 clusters",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+plot_ly( x=df_num$age, y=df_num$bmi, z=df_num$charges, color=df_num$lab_6)  %>%
+  add_markers() %>% 
+  layout(title  = "Hierarchical clustering average linkage with 4 clusters",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+
+# create distance matrix based on row correlation
+d2 = as.dist( 1 - cor(t(df_num %>% dplyr::select(charges,age,bmi))))
+h4 = hclust(d2, method="average")
+par(mfrow=c(1,1))
+plot(h4)
+
+df_num$lab_7 = as.factor(cutree(h4, h=0.00015))
+plot_ly( x=df_num$age, y=df_num$bmi, z=df_num$charges, color=df_num$lab_7)  %>%
+  add_markers() %>% 
+  layout(title  = "Hierarchical clustering correlation with 3 clusters",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+```
+
+What's interesting is once we've seen the plot for the main numerical variable against smoker, we start to have a grasp in the results of the above cluster.
+
+```{r, echo=FALSE, warning=FALSE}
+
+plot_ly( x=df_num$age, y=df_num$bmi, z=df_num$charges, color=df$smoker) %>%
+  add_markers() %>% 
+  layout(title  = "Scatterplot with respect to smoking habits",
+         scene = list(xaxis = list(title = 'Age'),
+                     yaxis = list(title = 'BMI'),
+                     zaxis = list(title = 'Insurance Charge')))
+
+```
+
+Most if not all the lower insurance charges are non-smoker. The middle layer of insurance charge is vaguely divided by **a BMI of 30** (the threshold for obesity). And the highest layer of insurance charge is all smokers. We get a clearer insight of the dataset's trend, organizing clusters with insurance charge in mind:
+
+* Obese smokers > Smokers > Obese non-smokers > non-smokers
+* Insurance charge has a positive correlation with age
+
+What's more interesting is the best model for 4 clusters divided the 4th one among age rather than bmi. With this information we can understand that even if the workings of the algorithm on a large dataset to be a black box, human insight is still vital.
+
+## Conclusion
+
+The most simple advice we can give you, that you might have already know, is to quit smoking and take care of your health.
